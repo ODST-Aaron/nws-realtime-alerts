@@ -1,0 +1,4 @@
+Customer,Name,SiteType,Latitude,Longitude,County,State
+Example ISP,Main NOC,NOC,35.8423,-90.7043,Craighead,AR
+Example ISP,Nashville Tower,Tower,36.1627,-86.7816,Davidson,TN
+Example MSP,Memphis Hub,Hub,35.1495,-90.0490,Shelby,TN

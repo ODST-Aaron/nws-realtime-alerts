@@ -1,0 +1,17 @@
+# Runtime data files — do not commit these
+locations.csv
+seen_alerts.json
+active_alerts.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
