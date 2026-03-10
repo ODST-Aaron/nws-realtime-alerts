@@ -21,6 +21,28 @@ Uses HTTP `Last-Modified` header checking to minimize API load while achieving n
 
 ---
 
+## Discord Embed Examples
+
+### Warnings
+![Severe Thunderstorm Warning Embed](docs/screenshots/severe-thunderstorm-warning-embed.png)
+
+### Watches
+![Severe Thunderstorm Watch Embed](docs/screenshots/severe-thunderstorm-watch-embed.png)
+
+### Advisories
+![Special Weather Statement Embed](docs/screenshots/special-weather-statement-advisory-embed.png)
+
+### Summaries
+![Active Alert Summary Embed](docs/screenshots/summary-embed.png)
+
+### Startup
+![Monitor Startup Embed](docs/screenshots/startup-embed.png)
+
+### Shutdown
+![Monitor Shutdown Embed](docs/screenshots/startup-embed.png)
+
+---
+
 ## Monitored Alert Types
 
 | Tier | Color | Alert Types |
