@@ -39,7 +39,7 @@ Uses HTTP `Last-Modified` header checking to minimize API load while achieving n
 ![Monitor Startup Embed](docs/screenshots/startup-embed.png)
 
 ### Shutdown
-![Monitor Shutdown Embed](docs/screenshots/startup-embed.png)
+![Monitor Shutdown Embed](docs/screenshots/shutdown-embed.png)
 
 ---
 
