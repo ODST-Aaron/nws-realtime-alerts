@@ -61,6 +61,7 @@ SEVERITY_TIERS = {
     "advisory": [
         "Wind Advisory",
         "Significant Weather Advisory",
+        "Special Weather Statement",
         "Extreme Cold Warning",
         "Dust Storm Warning",
     ],
@@ -113,8 +114,11 @@ def load_locations(csv_path: str) -> list:
                         "sitetype": row.get("SiteType", "").strip(),
                         "lat":      float(row["Latitude"]),
                         "lon":      float(row["Longitude"]),
-                        "county":   row.get("County", "").strip(),
-                        "state":    row.get("State", "").strip(),
+                        "city":        row.get("City", "").strip(),
+                        "county":      row.get("County", "").strip(),
+                        "county_code": row.get("CountyCode", "").strip().upper(),
+                        "state":       row.get("State", "").strip(),
+                        "zone":        row.get("Zone", "").strip().upper(),
                     })
                 except (ValueError, KeyError):
                     continue
@@ -151,13 +155,77 @@ def format_site_line(site: dict) -> str:
     parts.append(site.get("name", "Unknown"))
     if site.get("sitetype"):
         parts.append(site["sitetype"])
-    coord  = f"({site['lat']}, {site['lon']})"
-    county = (
-        f"[{site['county']} County, {site['state']}]"
-        if site.get("county") else
-        f"[{site.get('state', '')}]"
-    )
-    return "• " + " — ".join(parts) + f"  {coord}  {county}"
+    coord = f"({site['lat']}, {site['lon']})"
+    city   = site.get("city", "")
+    county = site.get("county", "")
+    state  = site.get("state", "")
+    if city and county:
+        location = f"[{city}, {county} County, {state}]"
+    elif county:
+        location = f"[{county} County, {state}]"
+    elif city:
+        location = f"[{city}, {state}]"
+    else:
+        location = f"[{state}]"
+    return "• " + " — ".join(parts) + f"  {coord}  {location}"
+
+
+def format_site_line_compact(site: dict) -> str:
+    """
+    Compact site line — omits coordinates to save space when the site list
+    is too long to fit in a Discord field at full format.
+    Format: • Customer — Name  [City, County County, State]
+    """
+    parts = []
+    if site.get("customer"):
+        parts.append(site["customer"])
+    parts.append(site.get("name", "Unknown"))
+    city   = site.get("city", "")
+    county = site.get("county", "")
+    state  = site.get("state", "")
+    if city and county:
+        location = f"[{city}, {county} County, {state}]"
+    elif county:
+        location = f"[{county} County, {state}]"
+    elif city:
+        location = f"[{city}, {state}]"
+    else:
+        location = f"[{state}]"
+    return "• " + " — ".join(parts) + f"  {location}"
+
+
+def build_site_field(sites: list, field_limit: int = 1000) -> str:
+    """
+    Build the site list string for a Discord embed field.
+    Tries full format first. If it exceeds field_limit, switches to compact
+    format. If still too long, truncates and appends an overflow note.
+
+    field_limit is set to 1000 (under Discord's 1024 hard limit) for safety.
+    """
+    # Try full format
+    full_lines = [format_site_line(s) for s in sites]
+    full_text  = "\n".join(full_lines)
+    if len(full_text) <= field_limit:
+        return full_text
+
+    # Try compact format
+    compact_lines = [format_site_line_compact(s) for s in sites]
+    compact_text  = "\n".join(compact_lines)
+    if len(compact_text) <= field_limit:
+        return compact_text
+
+    # Truncate compact lines and add overflow note
+    fitted = []
+    overflow_note = ""
+    for i, line in enumerate(compact_lines):
+        candidate = "\n".join(fitted + [line])
+        # Reserve ~40 chars for the overflow note
+        if len(candidate) > field_limit - 40:
+            remaining = len(compact_lines) - i
+            overflow_note = f"\n… and {remaining} more site(s) affected"
+            break
+        fitted.append(line)
+    return "\n".join(fitted) + overflow_note
 
 
 # ─────────────────────────────────────────
@@ -166,19 +234,44 @@ def format_site_line(site: dict) -> str:
 HEADERS = {"User-Agent": USER_AGENT}
 
 
+# Tracks consecutive HEAD checks without a Last-Modified header so we can
+# fall back to a full fetch after FALLBACK_FETCH_INTERVAL seconds.
+FALLBACK_FETCH_INTERVAL = 30    # seconds — full fetch if no Last-Modified header
+
+_last_fallback_fetch: float = 0.0   # module-level timestamp
+
+
 def check_last_modified(last_known: str | None) -> tuple[bool, str | None]:
     """
     Send a HEAD request to the NWS alerts endpoint.
     Returns (changed: bool, new_last_modified: str | None).
-    'changed' is True if the feed has updated since last_known.
+
+    'changed' is True when:
+      - The Last-Modified header is present and differs from last_known, OR
+      - The Last-Modified header is absent and FALLBACK_FETCH_INTERVAL seconds
+        have elapsed since the last fallback fetch (NWS sometimes omits this
+        header, which would otherwise prevent any fetches from occurring).
     """
+    global _last_fallback_fetch
     try:
         resp = requests.head(NWS_ALERTS_URL, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         lm = resp.headers.get("Last-Modified")
-        if lm and lm != last_known:
-            return True, lm
-        return False, last_known
+
+        if lm:
+            # Normal path — header present
+            if lm != last_known:
+                return True, lm
+            return False, last_known
+        else:
+            # Header absent — fall back to interval-based polling
+            now = time.time()
+            if now - _last_fallback_fetch >= FALLBACK_FETCH_INTERVAL:
+                print(f"  ⚠ Last-Modified header absent — fallback fetch triggered")
+                _last_fallback_fetch = now
+                return True, last_known
+            return False, last_known
+
     except requests.exceptions.RequestException as e:
         print(f"  ✗ HEAD request failed: {e}")
         return False, last_known
@@ -196,28 +289,70 @@ def fetch_alerts() -> list:
 
 
 def get_affected_sites(alert: dict, locations: list) -> list:
-    try:
-        geometry = alert.get("geometry")
-        if not geometry:
-            return []
-        coords   = geometry["coordinates"]
-        geo_type = geometry["type"]
+    """
+    Match sites against an alert using two methods:
 
-        polygons = []
-        if geo_type == "Polygon":
-            polygons = [Polygon(coords[0])]
-        elif geo_type == "MultiPolygon":
-            polygons = [Polygon(ring[0]) for ring in coords]
+    1. Polygon matching (preferred) — uses the alert's GeoJSON geometry to
+       check whether a site's coordinates fall inside the alert area.
+       Most Warnings and some Watches include polygon geometry.
 
+    2. UGC zone code fallback — used when NWS omits polygon geometry (common
+       for SPC Tornado/Severe Thunderstorm Watches, which are defined by
+       county FIPS lists rather than drawn polygons). Matches each site's
+       Zone code from the CSV against the UGC codes in the alert's geocode
+       field (e.g. ARC019, ARZ026).
+
+    The method used is logged to the console for each alert.
+    """
+    props = alert.get("properties", {})
+
+    # ── Stage 1: Polygon matching ──────────────────────────────────────────
+    geometry = alert.get("geometry")
+    if geometry:
+        try:
+            coords   = geometry["coordinates"]
+            geo_type = geometry["type"]
+
+            polygons = []
+            if geo_type == "Polygon":
+                polygons = [Polygon(coords[0])]
+            elif geo_type == "MultiPolygon":
+                polygons = [Polygon(ring[0]) for ring in coords]
+
+            if polygons:
+                affected = []
+                for site in locations:
+                    pt = Point(site["lon"], site["lat"])
+                    if any(poly.contains(pt) for poly in polygons):
+                        affected.append(site)
+                if affected:
+                    print(f"    matched via polygon ({len(affected)} site(s))")
+                return affected
+        except Exception as e:
+            print(f"  ✗ Polygon error: {e} — falling back to zone matching")
+
+    # ── Stage 2: UGC zone code fallback ───────────────────────────────────
+    # NWS SPC watches typically omit polygon geometry and instead list
+    # county/zone UGC codes in properties.geocode.UGC (e.g. ["ARC019","ARZ026"])
+    ugc_codes = set(props.get("geocode", {}).get("UGC", []))
+    if not ugc_codes:
+        # Some alerts use affectedZones URLs — extract the code from the end
+        zone_urls = props.get("affectedZones", [])
+        ugc_codes = {url.split("/")[-1] for url in zone_urls if url}
+
+    if ugc_codes:
         affected = []
         for site in locations:
-            pt = Point(site["lon"], site["lat"])
-            if any(poly.contains(pt) for poly in polygons):
+            site_zone        = site.get("zone", "")
+            site_county_code = site.get("county_code", "")
+            if (site_zone and site_zone in ugc_codes) or                (site_county_code and site_county_code in ugc_codes):
                 affected.append(site)
+        if affected:
+            print(f"    matched via UGC zone/county fallback ({len(affected)} site(s))")
         return affected
-    except Exception as e:
-        print(f"  ✗ Geometry error: {e}")
-        return []
+
+    print(f"  ✗ No geometry or UGC codes found — alert cannot be matched")
+    return []
 
 
 # ─────────────────────────────────────────
@@ -270,6 +405,100 @@ def send_shutdown():
     print("✓ Shutdown notification sent")
 
 
+def send_startup_active_summary(locations: list, seen_alerts: list) -> tuple[list, dict]:
+    """
+    Runs once on startup. Fetches the current NWS feed and checks for any
+    monitored alerts already affecting your sites — regardless of seen cache.
+
+    - Alerts NOT in seen cache: posted as normal alert embeds and added to cache
+    - Alerts already in seen cache: listed in a single "already active" summary
+      embed so the team has situational awareness without duplicate full embeds
+
+    Returns updated (seen_alerts, active_alerts) so main() can use them.
+    """
+    print("  Checking for alerts already active at startup...")
+    alerts = fetch_alerts()
+    if not alerts:
+        print("  No alerts retrieved at startup.")
+        return seen_alerts, {}
+
+    active_alerts  = {}
+    already_seen   = []   # active + previously notified
+    newly_notified = 0
+
+    current_ids = {a.get("id") for a in alerts}
+
+    for alert in alerts:
+        alert_id = alert.get("id", "")
+        event    = alert.get("properties", {}).get("event", "")
+
+        if event not in MONITORED_ALERTS:
+            continue
+
+        affected = get_affected_sites(alert, locations)
+        if not affected:
+            continue
+
+        tier  = get_tier(event)
+        props = alert["properties"]
+
+        # Track in active_alerts regardless
+        active_alerts[alert_id] = {
+            "event": event,
+            "tier":  tier,
+            "sites": [s["name"] for s in affected],
+            "sent":  datetime.now(timezone.utc).isoformat(),
+        }
+
+        if alert_id in seen_alerts:
+            # Already notified in a previous run — collect for summary
+            already_seen.append({
+                "event":    event,
+                "tier":     tier,
+                "expires":  format_time(props.get("expires", "")),
+                "sites":    affected,
+                "headline": props.get("headline", ""),
+            })
+        else:
+            # New alert — post full embed and add to cache
+            send_alert(alert, affected)
+            seen_alerts.append(alert_id)
+            newly_notified += 1
+            print(f"  → NEW at startup: {tier.upper()} | {event} | {len(affected)} site(s)")
+
+    # Post a single summary embed for all already-seen active alerts
+    if already_seen:
+        lines = []
+        for item in already_seen:
+            emoji    = TIER_EMOJIS.get(item["tier"], "⚠️")
+            sitelist = build_site_field(item["sites"])
+            lines.append(
+                f"{emoji} **{item['event']}** — expires {item['expires']}\n{sitelist}"
+            )
+
+        embed = {
+            "title":       "📋  Alerts Active at Startup",
+            "description": (
+                "The following alerts were already active when the monitor started.\n"
+                "These were previously notified and will not re-fire as new alerts.\n\n"
+                + "\n\n".join(lines)
+            ),
+            "color":       0xAAAAAA,
+            "timestamp":   datetime.now(timezone.utc).isoformat(),
+            "footer":      {"text": "NWS Real-Time Alert Monitor"},
+        }
+        post_embed(embed)
+        print(f"  → {len(already_seen)} already-active alert(s) summarised in Discord")
+
+    if not already_seen and newly_notified == 0:
+        print("  No active alerts affecting monitored sites at startup.")
+
+    # Prune seen cache of IDs no longer in the feed
+    seen_alerts = [i for i in seen_alerts if i in current_ids]
+
+    return seen_alerts, active_alerts
+
+
 def send_alert(alert: dict, affected_sites: list):
     props    = alert["properties"]
     event    = props.get("event", "Unknown Event")
@@ -280,18 +509,18 @@ def send_alert(alert: dict, affected_sites: list):
     tier     = get_tier(event)
     emoji    = TIER_EMOJIS.get(tier, "⚠️")
 
-    site_text = "\n".join(format_site_line(s) for s in affected_sites)
+    site_text = build_site_field(affected_sites)
 
     embed = {
         "title":       f"{emoji}  {event}",
         "description": headline,
         "color":       TIER_COLORS[tier],
         "fields": [
-            {"name": "Severity",                            "value": severity,     "inline": True},
-            {"name": "Tier",                                "value": tier.upper(), "inline": True},
-            {"name": "Onset",                               "value": onset,        "inline": True},
-            {"name": "Expires",                             "value": expires,      "inline": True},
-            {"name": f"Affected Sites ({len(affected_sites)})", "value": site_text or "None", "inline": False},
+            {"name": "Severity",                                  "value": severity,         "inline": True},
+            {"name": "Tier",                                      "value": tier.upper(),     "inline": True},
+            {"name": "Onset",                                     "value": onset,            "inline": True},
+            {"name": "Expires",                                   "value": expires,          "inline": True},
+            {"name": f"Affected Sites ({len(affected_sites)})",   "value": site_text or "None", "inline": False},
         ],
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "footer":    {"text": f"NWS Real-Time Alert Monitor  •  ID: {alert['id'][-12:]}"},
@@ -341,6 +570,11 @@ def main():
     signal.signal(signal.SIGTERM, handle_shutdown)
 
     send_startup(locations)
+
+    # Check for any alerts already active at startup
+    seen_alerts, active_alerts = send_startup_active_summary(locations, seen_alerts)
+    save_json(CACHE_FILE, seen_alerts)
+    save_json(ACTIVE_FILE, active_alerts)
 
     last_modified = None
     last_summary  = time.time()

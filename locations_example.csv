@@ -1,4 +1,6 @@
-Customer,Name,SiteType,Latitude,Longitude,County,State
-Example ISP,Main NOC,NOC,35.8423,-90.7043,Craighead,AR
-Example ISP,Nashville Tower,Tower,36.1627,-86.7816,Davidson,TN
-Example MSP,Memphis Hub,Hub,35.1495,-90.0490,Shelby,TN
+Customer,Name,SiteType,Latitude,Longitude,City,County,State,Notes,Zone,CountyCode
+ExampleISP,Jonesboro NOC,Office,35.8423,-90.7043,Jonesboro,Craighead,AR,,ARZ026,ARC031
+ExampleISP,Memphis Hub,Hub,35.1495,-90.0490,Memphis,Shelby,TN,,TNZ033,TNC157
+ExampleISP,Jackson Tower,Tower,32.2988,-90.1848,Jackson,Hinds,MS,,MSZ040,MSC049
+ExampleISP,Fayetteville POP,POP,36.0626,-94.1574,Fayetteville,Washington,AR,,ARZ006,ARC143
+ExampleISP,Tupelo Site,Tower,34.2576,-88.7034,Tupelo,Lee,MS,,MSZ009,MSC081
