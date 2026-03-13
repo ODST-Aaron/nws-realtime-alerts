@@ -421,7 +421,7 @@ MIT License — see LICENSE file for details
 
 ## Author
 
-**Aaron @ Irby Utilities NOC**  
+**Aaron Wallace, Network Operations Engineer**  
 Jonesboro, Arkansas
 
 ---
