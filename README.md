@@ -15,6 +15,23 @@ Designed for Network Operations Centers (NOCs) managing geographically distribut
 - **Graceful shutdown** — SIGINT/SIGTERM handlers with shutdown notifications
 - **Minimal API load** — Lightweight HEAD requests every 30s, full fetch only when feed changes
 
+---
+
+## Example Notifications
+
+### Tornado Warning
+![Tornado Warning Example](docs/screenshots/tornado-warning-embed-map.png)
+*Tornado Warning with auto-generated map showing alert polygon and affected sites*
+
+### Severe Thunderstorm Watch
+![Severe Thunderstorm Watch Example](docs/screenshots/severe-thunderstorm-watch-embed.png)
+*Severe Thunderstorm Watch notification* 
+
+### Other Alert Types
+Additional examples showing startup, shutdown, and summary notifications are available in [docs/screenshots/](docs/screenshots/).
+
+---
+
 ## Alert Types Monitored
 
 ### Critical (Red 🚨)
