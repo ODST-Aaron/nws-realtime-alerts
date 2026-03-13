@@ -8,7 +8,8 @@ Architecture:
   - HEAD request every HEAD_INTERVAL seconds (lightweight, ~1KB)
   - Full fetch + processing only when Last-Modified header has changed
   - Site matching via Shapely polygon intersection
-  - Tiered Discord embeds (critical / warning / watch / advisory)
+  - Tiered Discord and/or Slack notifications (critical / warning / watch / advisory)
+  - Optional map image generation via nws-alert-mapper module
   - Startup and shutdown notifications via SIGINT/SIGTERM handlers
 """
 
@@ -21,16 +22,33 @@ import sys
 from datetime import datetime, timezone
 from shapely.geometry import Point, Polygon
 
+# Optional integrations — gracefully disabled if modules not found
+try:
+    from notifier import Notifier
+    _NOTIFIER_AVAILABLE = True
+except ImportError:
+    _NOTIFIER_AVAILABLE = False
+
+try:
+    from alert_mapper import generate_alert_map
+    _MAPPER_AVAILABLE = True
+except ImportError:
+    _MAPPER_AVAILABLE = False
+
 # ─────────────────────────────────────────
 #  CONFIGURATION  —  edit these values
 # ─────────────────────────────────────────
-CSV_FILE        = r"C:\nws-realtime-alerts\locations.csv"
+CSV_FILE        = r"locations.csv"
 DISCORD_WEBHOOK = "YOUR_DISCORD_WEBHOOK_URL_HERE"
-CACHE_FILE      = r"C:\nws-realtime-alerts\seen_alerts.json"
-ACTIVE_FILE     = r"C:\nws-realtime-alerts\active_alerts.json"
+SLACK_WEBHOOK   = "YOUR_SLACK_WEBHOOK_URL_HERE"    # Set to None to disable Slack
+CACHE_FILE      = r"seen_alerts.json"
+ACTIVE_FILE     = r"active_alerts.json"
 
-HEAD_INTERVAL   = 30    # seconds between lightweight HEAD checks
-SUMMARY_INTERVAL = 600  # seconds between active alert summaries (0 to disable)
+HEAD_INTERVAL    = 30    # seconds between lightweight HEAD checks
+SUMMARY_INTERVAL = 600   # seconds between active alert summaries (0 to disable)
+
+# Map generation — requires nws-alert-mapper module and cartopy
+ENABLE_MAPS     = True   # Set to False to disable map generation
 
 NWS_ALERTS_URL  = "https://api.weather.gov/alerts/active"
 USER_AGENT      = "NWS-RealTime-Monitor/1.0 (github.com/ODST-Aaron/nws-realtime-alerts)"
@@ -356,20 +374,45 @@ def get_affected_sites(alert: dict, locations: list) -> list:
 
 
 # ─────────────────────────────────────────
-#  DISCORD
+#  NOTIFIER
 # ─────────────────────────────────────────
-def post_embed(embed: dict) -> bool:
-    try:
-        resp = requests.post(
-            DISCORD_WEBHOOK,
-            json={"embeds": [embed]},
-            timeout=10,
+def _get_notifier() -> object:
+    """Return a configured Notifier instance, or a no-op fallback."""
+    if _NOTIFIER_AVAILABLE:
+        return Notifier(
+            discord_webhook=DISCORD_WEBHOOK,
+            slack_webhook=SLACK_WEBHOOK,
+            username="NWS Alert Monitor",
         )
-        resp.raise_for_status()
-        return True
-    except Exception as e:
-        print(f"  ✗ Discord error: {e}")
-        return False
+    # Fallback — Discord only, no Slack
+    class _LegacyNotifier:
+        def send_embed(self, embed, image_bytes=None):
+            try:
+                resp = requests.post(
+                    DISCORD_WEBHOOK,
+                    json={"embeds": [embed]},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                return True
+            except Exception as e:
+                print(f"  ✗ Discord error: {e}")
+                return False
+        def send_status(self, title, description, tier="status", footer=""):
+            from datetime import datetime, timezone
+            embed = {
+                "title": title, "description": description,
+                "color": TIER_COLORS.get(tier, 0x888888),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "footer": {"text": footer},
+            }
+            return self.send_embed(embed)
+    return _LegacyNotifier()
+
+
+def post_embed(embed: dict, image_bytes: bytes | None = None) -> bool:
+    """Send an embed via the configured notifier."""
+    return _get_notifier().send_embed(embed, image_bytes)
 
 
 def send_startup(locations: list):
@@ -525,7 +568,14 @@ def send_alert(alert: dict, affected_sites: list):
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "footer":    {"text": f"NWS Real-Time Alert Monitor  •  ID: {alert['id'][-12:]}"},
     }
-    post_embed(embed)
+
+    # Generate map if enabled and mapper is available
+    image_bytes = None
+    if ENABLE_MAPS and _MAPPER_AVAILABLE:
+        print(f"  [mapper] Generating map for {event}...")
+        image_bytes = generate_alert_map(alert, affected_sites, tier)
+
+    post_embed(embed, image_bytes)
 
 
 def send_summary(active_alerts: dict):

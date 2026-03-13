@@ -1,17 +1,50 @@
-# Runtime data files — do not commit these
-locations.csv
-seen_alerts.json
-active_alerts.json
-
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-.env
-venv/
-.venv/
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Editor
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
+
+# Project-specific
+locations.csv
+seen_alerts.json
+active_alerts.json
+seen_mds.json
+*.log
+
+# Sensitive data
+config.py
+secrets.py
+.env
+
+# OS
+.DS_Store
+Thumbs.db

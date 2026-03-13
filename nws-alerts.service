@@ -1,0 +1,19 @@
+[Unit]
+Description=NWS Real-Time Weather Alert Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/nws-realtime-alerts
+ExecStart=/usr/bin/python3 /path/to/nws-realtime-alerts/weather_alerts.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Optional: Set environment variables
+# Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

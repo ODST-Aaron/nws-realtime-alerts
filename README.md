@@ -1,130 +1,412 @@
-# nws-realtime-alerts
+# NWS Real-Time Weather Alert Monitor
 
-A Python-based NWS weather alert monitor for ISP/NOC environments. Posts tiered Discord embeds when active NWS alerts affect your monitored network sites.
+A Python-based real-time weather alert monitoring system that polls the National Weather Service (NWS) alerts API and sends tiered notifications to Discord and Slack webhooks when alerts affect your monitored locations.
 
-Uses HTTP `Last-Modified` header checking to minimize API load while achieving near-real-time alert detection. Falls back to interval-based polling when the header is absent.
-
----
+Designed for Network Operations Centers (NOCs) managing geographically distributed infrastructure that needs immediate awareness of severe weather impacting critical sites.
 
 ## Features
 
-- **Real-time detection** via `Last-Modified` HEAD checks every 30 seconds — full fetch only when the feed changes
-- **Fallback polling** every 30 seconds when NWS omits the `Last-Modified` header
-- **Two-stage site matching:**
-  - Stage 1 — Polygon matching using Shapely for alerts with GeoJSON geometry
-  - Stage 2 — UGC zone/county code fallback for SPC watches that use county FIPS lists instead of polygons
-- **Tiered Discord embeds** with color coding by severity
-- **Adaptive site list formatting** — switches to compact format and truncates with overflow count when site lists are large
-- **Startup active alert check** — posts current active alerts on every restart so the team has situational awareness mid-event
-- **Periodic active alert summary** every 10 minutes while alerts are ongoing
-- **Graceful shutdown** — posts a shutdown notification on Ctrl+C or SIGTERM
+- **Near real-time monitoring** — Uses HTTP `Last-Modified` header checking for ~30 second alert latency vs standard polling
+- **Intelligent site matching** — Polygon intersection (preferred) + UGC zone/county code fallback
+- **Multi-platform notifications** — Discord rich embeds + Slack Block Kit attachments
+- **Tiered alert system** — Critical / Warning / Watch / Advisory with color-coded embeds
+- **Auto-generated maps** — Optional PNG map generation showing alert polygons, county boundaries, and affected site pins
+- **Startup awareness** — On launch, reports all currently active alerts affecting your sites
+- **Graceful shutdown** — SIGINT/SIGTERM handlers with shutdown notifications
+- **Minimal API load** — Lightweight HEAD requests every 30s, full fetch only when feed changes
 
----
+## Alert Types Monitored
 
-## Monitored Alert Types
+### Critical (Red 🚨)
+- Tornado Emergency
+- Tornado Warning
+- Flash Flood Emergency
 
-| Tier | Color | Alert Types |
-|------|-------|-------------|
-| 🚨 CRITICAL | Red | Tornado Emergency, Tornado Warning, Flash Flood Emergency |
-| ⚠️ WARNING | Orange | Severe Thunderstorm Warning, Flash Flood Warning, Blizzard Warning, Ice Storm Warning, Extreme Wind Warning, Winter Storm Warning |
-| 👀 WATCH | Yellow | Tornado Watch, Severe Thunderstorm Watch, Winter Storm Watch, High Wind Warning |
-| 🔵 ADVISORY | Blue | Wind Advisory, Significant Weather Advisory, Special Weather Statement, Extreme Cold Warning, Dust Storm Warning |
+### Warning (Orange ⚠️)
+- Severe Thunderstorm Warning
+- Flash Flood Warning
+- Blizzard Warning
+- Ice Storm Warning
+- Extreme Wind Warning
+- Winter Storm Warning
 
----
+### Watch (Yellow 👀)
+- Tornado Watch
+- Severe Thunderstorm Watch
+- Winter Storm Watch
+- High Wind Warning
+
+### Advisory (Blue 🔵)
+- Wind Advisory
+- Significant Weather Advisory
+- Special Weather Statement
+- Extreme Cold Warning
+- Dust Storm Warning
 
 ## Requirements
 
+- Python 3.12+
+- Internet connectivity for NWS API access
+- Discord and/or Slack webhook URLs
+
+### Python Dependencies
+
 ```
-requests>=2.31.0
-shapely>=2.0.0
+requests
+shapely
+matplotlib
+cartopy
+numpy
 ```
 
 Install with:
-```powershell
-pip install requests shapely
+```bash
+pip install -r requirements.txt
 ```
 
----
+**Note:** `cartopy` requires system-level geospatial libraries. See [Installation](#installation) for platform-specific instructions.
 
-## Setup
+## Installation
 
-### 1. Clone the repository
+### Windows
 
-```powershell
+1. **Install Python 3.12+** from [python.org](https://www.python.org/downloads/)
+
+2. **Install geospatial dependencies for cartopy:**
+   - Download and install [OSGeo4W](https://trac.osgeo.org/osgeo4w/) or use conda:
+     ```bash
+     conda install -c conda-forge cartopy
+     ```
+   - Alternatively, use pre-built wheels from [Christoph Gohlke's repository](https://www.lfd.uci.edu/~gohlke/pythonlibs/)
+
+3. **Clone this repository:**
+   ```bash
+   git clone https://github.com/ODST-Aaron/nws-realtime-alerts.git
+   cd nws-realtime-alerts
+   ```
+
+4. **Install Python dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Linux (Ubuntu/Debian)
+
+```bash
+# Install system dependencies
+sudo apt-get update
+sudo apt-get install python3-pip libgeos-dev libproj-dev proj-data proj-bin
+
+# Clone repository
 git clone https://github.com/ODST-Aaron/nws-realtime-alerts.git
 cd nws-realtime-alerts
+
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
-### 2. Prepare your locations CSV
+### Oracle Cloud / Production Deployment
 
-Copy `locations_example.csv` to `locations.csv` and populate it with your sites.
+For headless server deployment (Oracle Cloud, AWS, etc.):
+
+```bash
+# Install system dependencies
+sudo yum install -y python3-pip geos-devel proj-devel
+
+# Clone repository
+git clone https://github.com/ODST-Aaron/nws-realtime-alerts.git
+cd nws-realtime-alerts
+
+# Install Python dependencies
+pip3 install -r requirements.txt
+
+# Run as a systemd service (optional)
+sudo cp nws-alerts.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable nws-alerts.service
+sudo systemctl start nws-alerts.service
+```
+
+## Configuration
+
+### 1. Create your locations CSV
+
+The monitor requires a CSV file with your monitored sites. Use `locations_example.csv` as a template.
 
 **Required columns:**
+- `Customer` — Client/customer name
+- `Name` — Site identifier
+- `SiteType` — Site type (e.g., Tower, POP, Datacenter)
+- `Latitude` — Decimal degrees (e.g., 35.8423)
+- `Longitude` — Decimal degrees (e.g., -90.7043)
+- `City` — City name
+- `County` — County name (without "County" suffix)
+- `CountyCode` — NWS county UGC code (e.g., ARC055)
+- `State` — Two-letter state abbreviation
+- `Zone` — NWS forecast zone code (e.g., ARZ026)
 
-| Column | Description | Example |
-|--------|-------------|---------|
-| Customer | Customer or organization name | `ExampleISP` |
-| Name | Site name | `Jonesboro NOC` |
-| SiteType | Type of site | `Tower`, `Hub`, `Office` |
-| Latitude | Decimal latitude | `35.8423` |
-| Longitude | Decimal longitude | `-90.7043` |
-| City | Nearest city per NWS | `Jonesboro` |
-| County | County name | `Craighead` |
-| State | Two-letter state code | `AR` |
-| Notes | Optional notes | |
-| Zone | NWS forecast zone code | `ARZ026` |
-| CountyCode | NWS county UGC code | `ARC031` |
+**To auto-populate Zone, CountyCode, County, and City columns:**
 
-> `Zone` and `CountyCode` are required for UGC fallback matching of SPC watches. Use `bulk_zone_lookup.py` to populate these automatically.
-
-### 3. Populate Zone and CountyCode with bulk_zone_lookup.py
-
-```powershell
+```bash
+# Edit INPUT_CSV and OUTPUT_CSV paths in bulk_zone_lookup.py
 py -3.12 bulk_zone_lookup.py
 ```
 
-This queries the NWS `/points/` API for each site (~1 second per site) and writes `locations_with_zones.csv`. Review the output, then rename it to `locations.csv`.
+This script queries the NWS `/points/` API for each site and populates the geographic fields automatically. Runtime: ~1 second per site.
 
-### 4. Configure the script
+### 2. Configure webhook URLs
 
-Edit the configuration block at the top of `weather_alerts.py`:
+Edit `weather_alerts.py` and set your webhook URLs:
 
 ```python
-CSV_FILE        = r"C:\nws-realtime-alerts\locations.csv"
-DISCORD_WEBHOOK = "YOUR_DISCORD_WEBHOOK_URL_HERE"
-CACHE_FILE      = r"C:\nws-realtime-alerts\seen_alerts.json"
-ACTIVE_FILE     = r"C:\nws-realtime-alerts\active_alerts.json"
+DISCORD_WEBHOOK = "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
+SLACK_WEBHOOK   = "https://hooks.slack.com/services/YOUR_WEBHOOK_HERE"  # or None
 ```
 
-### 5. Run
+To create webhooks:
+- **Discord:** Server Settings → Integrations → Webhooks → New Webhook
+- **Slack:** Workspace Settings → Manage Apps → Incoming Webhooks → Add to Slack
 
-```powershell
+### 3. Adjust file paths (if needed)
+
+If not running from `C:\nws-realtime-alerts\`, update these paths in `weather_alerts.py`:
+
+```python
+CSV_FILE    = r"C:\nws-realtime-alerts\locations.csv"
+CACHE_FILE  = r"C:\nws-realtime-alerts\seen_alerts.json"
+ACTIVE_FILE = r"C:\nws-realtime-alerts\active_alerts.json"
+```
+
+### 4. Configure map generation (optional)
+
+To disable map generation:
+
+```python
+ENABLE_MAPS = False
+```
+
+Maps are generated as PNG attachments and sent with Discord embeds. Slack support for map delivery is pending (currently shows "Map attached" footer note).
+
+## Usage
+
+### Run the monitor
+
+```bash
 py -3.12 weather_alerts.py
 ```
 
+The monitor will:
+1. Send a startup notification to Discord/Slack
+2. Check for any alerts already active at startup
+3. Begin polling the NWS API every 30 seconds
+4. Post alert embeds when new alerts affect your sites
+5. Send periodic summaries of active alerts (configurable)
+
+### Graceful shutdown
+
+Press `Ctrl+C` to trigger graceful shutdown. The monitor will:
+- Send a shutdown notification
+- Save the seen alerts cache
+- Exit cleanly
+
+### Run as a background service (Windows)
+
+Use NSSM (Non-Sucking Service Manager):
+
+```bash
+# Download NSSM from https://nssm.cc/download
+nssm install NWSAlerts "C:\Python312\python.exe" "C:\nws-realtime-alerts\weather_alerts.py"
+nssm start NWSAlerts
+```
+
+### Run as a systemd service (Linux)
+
+Example `nws-alerts.service`:
+
+```ini
+[Unit]
+Description=NWS Real-Time Alert Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/nws-realtime-alerts
+ExecStart=/usr/bin/python3 /path/to/nws-realtime-alerts/weather_alerts.py
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## File Structure
+
+```
+nws-realtime-alerts/
+├── weather_alerts.py          # Main monitoring script
+├── notifier.py                # Discord/Slack notification abstraction
+├── alert_mapper.py            # PNG map generation module
+├── bulk_zone_lookup.py        # NWS zone/county lookup utility
+├── locations.csv              # Your monitored sites (not in repo)
+├── locations_example.csv      # Template for locations.csv
+├── seen_alerts.json           # Alert cache (auto-generated)
+├── active_alerts.json         # Active alerts tracking (auto-generated)
+├── requirements.txt           # Python dependencies
+├── README.md                  # This file
+└── .gitignore                 # Git ignore rules
+```
+
+## How It Works
+
+### Efficient Polling Architecture
+
+Instead of fetching the entire NWS alerts feed every poll interval (which would be ~500KB every 30s), the monitor uses HTTP `Last-Modified` header checking:
+
+1. **HEAD request** every 30 seconds (~1KB, no body)
+2. **Compare** `Last-Modified` header to cached value
+3. **Full GET fetch** only when header changes
+4. **Process** alerts and match against monitored sites
+
+This reduces bandwidth by ~98% vs naive polling.
+
+### Site Matching Logic
+
+The monitor uses two methods to determine if a site is affected by an alert:
+
+#### 1. Polygon Matching (Preferred)
+Most NWS warnings include GeoJSON polygon geometry. The monitor checks if each site's coordinates fall inside the alert polygon using Shapely.
+
+#### 2. UGC Zone/County Fallback
+When polygon geometry is absent (common for SPC watches), the monitor falls back to matching the site's `Zone` or `CountyCode` against the alert's UGC codes.
+
+**Example:** An SPC Tornado Watch lists `["ARC055", "ARC031", "ARZ026"]` in `properties.geocode.UGC`. Sites with matching zone or county codes are flagged as affected.
+
+### Startup Behavior
+
+On launch, the monitor:
+1. Fetches the current NWS feed
+2. Identifies all active alerts affecting your sites
+3. Posts **full alert embeds** for new alerts not in the cache
+4. Posts a **summary embed** for alerts already in the cache (prevents duplicate notifications while maintaining situational awareness)
+
+This ensures your team has complete context on startup without spam from alerts you were already notified about.
+
+## Map Generation
+
+The `alert_mapper.py` module generates static PNG maps showing:
+
+- **Alert polygon** (for warnings with GeoJSON geometry)
+- **County boundaries** (for UGC fallback alerts like SPC watches)
+- **Affected site pins** with labels (red)
+- **State and county boundary lines** for geographic context
+- **Dark theme** optimized for NOC displays
+
+Maps are attached to Discord embeds. Slack support is pending (currently shows "Map attached" footer note).
+
+### Map Rendering
+
+Maps use:
+- **matplotlib** for rendering
+- **cartopy** for geographic projections and base maps
+- **shapely** for geometry operations
+- **Census Bureau TIGER** county shapefiles (fetched at runtime, cached in memory)
+
+The mapper automatically computes map extent from alert geometry and affected sites, ensuring all relevant features are visible.
+
+## Configuration Options
+
+### Poll Intervals
+
+```python
+HEAD_INTERVAL    = 30    # seconds between lightweight HEAD checks
+SUMMARY_INTERVAL = 600   # seconds between active alert summaries (0 to disable)
+```
+
+### Monitored Alert Types
+
+Edit `SEVERITY_TIERS` in `weather_alerts.py` to add/remove alert types:
+
+```python
+SEVERITY_TIERS = {
+    "critical": [
+        "Tornado Emergency",
+        "Tornado Warning",
+        # Add more...
+    ],
+    # ...
+}
+```
+
+### Map Appearance
+
+Edit `alert_mapper.py` to customize:
+- Colors (`COLOR_POLYGON`, `COLOR_AFFECTED_PIN`)
+- Map size (`MAP_FIGSIZE`, `MAP_DPI`)
+- Padding around alert extent (`PADDING_DEG`)
+
+## Troubleshooting
+
+### "No locations loaded — check your CSV path and format"
+
+- Verify `CSV_FILE` path is correct
+- Check CSV has required columns (at minimum: `Latitude`, `Longitude`)
+- Ensure CSV uses comma delimiters (tab-delimited also supported via auto-detection)
+
+### "✗ HEAD request failed" or "✗ GET request failed"
+
+- Check internet connectivity
+- Verify firewall allows HTTPS to `api.weather.gov`
+- NWS API may be temporarily down (retry after 1-2 minutes)
+
+### Maps not generating
+
+- Verify `cartopy` is installed correctly: `python -c "import cartopy; print(cartopy.__version__)"`
+- Check system geospatial libraries are installed (GEOS, PROJ)
+- Set `ENABLE_MAPS = False` to disable map generation and continue monitoring
+
+### "✗ Discord error" or "✗ Slack error"
+
+- Verify webhook URLs are correct
+- Check webhook hasn't been deleted from Discord/Slack
+- Test webhook manually with `curl`:
+  ```bash
+  curl -X POST -H "Content-Type: application/json" \
+    -d '{"content":"Test message"}' \
+    YOUR_DISCORD_WEBHOOK_URL
+  ```
+
+### Alert not matching sites despite being in the area
+
+- Check site's `Zone` and `CountyCode` are populated (run `bulk_zone_lookup.py` if needed)
+- Verify coordinates are in decimal degrees (not DMS format)
+- Enable debug logging to see which matching method is being used
+
+## Companion Projects
+
+- **[SPC Mesoscale Discussion Monitor](https://github.com/ODST-Aaron/spc-md-monitor)** — Monitors SPC MD RSS feed for pre-watch outlooks
+- **[NWS Alert Mapper](https://github.com/ODST-Aaron/nws-alert-mapper)** — Standalone alert map generator (pending creation)
+
+## Contributing
+
+Pull requests welcome. For major changes, please open an issue first to discuss what you'd like to change.
+
+## License
+
+MIT License — see LICENSE file for details
+
+## Acknowledgments
+
+- **National Weather Service** — Alert data and API
+- **Storm Prediction Center** — Mesoscale Discussion feed
+- **Census Bureau TIGER** — County boundary shapefiles
+- **Shapely, Cartopy, Matplotlib** — Geospatial and mapping libraries
+
+## Author
+
+**Aaron @ Irby Utilities NOC**  
+Jonesboro, Arkansas
+
 ---
 
-## File Reference
-
-| File | Description |
-|------|-------------|
-| `weather_alerts.py` | Main monitor script |
-| `bulk_zone_lookup.py` | Populates Zone, CountyCode, County, and City columns in your CSV |
-| `locations_example.csv` | Example CSV structure |
-| `locations.csv` | Your live site list — **excluded from git** |
-| `seen_alerts.json` | Alert ID cache — **excluded from git** |
-| `active_alerts.json` | Active alert tracking — **excluded from git** |
-
----
-
-## Notes
-
-- The NWS alerts API (`api.weather.gov`) does not always return a `Last-Modified` header. When absent, the script falls back to a full fetch every 30 seconds automatically.
-- SPC Tornado Watches and Severe Thunderstorm Watches do not include polygon geometry — they are matched via UGC county codes (`ARC031`) rather than coordinates. The `CountyCode` column in your CSV enables this.
-- `seen_alerts.json` persists between runs to prevent duplicate notifications. Delete it if you want all currently active alerts to re-fire on next startup.
-
----
-
-## Related
-
-- [spc-md-monitor](https://github.com/ODST-Aaron/spc-md-monitor) — Companion script for SPC Mesoscale Discussion notifications
+**Disclaimer:** This software is provided as-is for informational purposes. Always follow official NWS alerts and warnings. The developer assumes no liability for decisions made based on alerts delivered by this system.

@@ -19,8 +19,8 @@ import time
 # ─────────────────────────────────────────
 #  CONFIGURATION
 # ─────────────────────────────────────────
-INPUT_CSV  = r"C:\nws-realtime-alerts\locations.csv"
-OUTPUT_CSV = r"C:\nws-realtime-alerts\locations_with_zones.csv"
+INPUT_CSV  = r"locations.csv"
+OUTPUT_CSV = r"locations_with_zones.csv"
 
 HEADERS = {
     "User-Agent": "NOC-BulkZoneLookup/1.0 (bulk.lookup@example.com)",
